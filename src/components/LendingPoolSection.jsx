@@ -15,6 +15,7 @@ export function LendingPoolSection({
   btcPrice,
   tvl,
   getPerpHedgeMetrics,
+  currentTwilightFundingAPY,
   selectedStrategy,
   onSelectStrategy,
   getTtmApr,
@@ -85,6 +86,33 @@ export function LendingPoolSection({
         </h3>
         <span className="text-xs text-slate-500">Lend to pool (APY) + hedge with Twilight perp by skew</span>
       </div>
+
+      {/* Pool APY / APR card at top of section */}
+      {poolApy24h != null && !error && (
+        <div className="rounded-xl bg-gradient-to-r from-amber-100 to-yellow-100 border-2 border-amber-300 p-4 mb-4">
+          <div className="text-sm font-semibold text-slate-700 mb-2">Pool rates (last 24h, annualized)</div>
+          <div className="flex flex-wrap gap-6">
+            <div>
+              <div className="text-xs text-slate-500">Pool APY</div>
+              <div className="text-2xl font-bold text-amber-800">{poolApy24h.toFixed(2)}%</div>
+            </div>
+            <div>
+              <div className="text-xs text-slate-500">Pool APR (simple)</div>
+              <div className="text-2xl font-bold text-amber-800">
+                {(((1 + poolApy24h / 100) ** (1 / 12) - 1) * 12 * 100).toFixed(2)}%
+              </div>
+            </div>
+            {currentTwilightFundingAPY != null && (
+              <div>
+                <div className="text-xs text-slate-500">Twilight funding</div>
+                <div className={`text-2xl font-bold ${currentTwilightFundingAPY >= 0 ? 'text-amber-800' : 'text-red-700'}`}>
+                  {currentTwilightFundingAPY >= 0 ? '+' : ''}{currentTwilightFundingAPY.toFixed(2)}%
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
         {loading && <div className="col-span-2 text-amber-600">Loading…</div>}

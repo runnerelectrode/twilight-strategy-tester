@@ -628,7 +628,7 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
       const totalMaxLoss = twilightMaxLoss + binanceMaxLoss;
 
       if (totalMarginUSD === 0) return {
-        apy: 0, dailyPnL: 0, monthlyPnL: 0, totalMargin: 0,
+        apy: 0, apr: 0, dailyPnL: 0, monthlyPnL: 0, totalMargin: 0,
         twilightMarginBTC: 0, twilightMarginUSD: 0, binanceMarginUSDT: 0,
         totalFees: 0, basisProfit: 0, monthlyFundingPnL: 0,
         twilightLiquidationPrice: null, twilightLiquidationPct: null,
@@ -837,9 +837,10 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
         }
       }
 
-      // APY calculation based on total capital deployed (flat price scenario)
-      const monthlyROI = (monthlyPnLFlat / totalMarginUSD) * 100;
-      const apy = monthlyROI * 12;
+      // APY (compound) and APR (simple) based on total capital deployed (flat price scenario)
+      const monthlyROI = totalMarginUSD > 0 ? monthlyPnLFlat / totalMarginUSD : 0;
+      const apr = monthlyROI * 12 * 100; // simple annualized
+      const apy = totalMarginUSD > 0 ? ((1 + monthlyROI) ** 12 - 1) * 100 : 0; // compound
 
       // APY with +5% price move
       const apyUp5 = ((pnlUp5 / totalMarginUSD) * 100) * 12;
@@ -883,6 +884,7 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
 
       return {
         apy: isNaN(apy) ? 0 : apy,
+        apr: isNaN(apr) ? 0 : apr,
         dailyPnL: isNaN(dailyPnL) ? 0 : dailyPnL,
         monthlyPnL: isNaN(monthlyPnLFlat) ? 0 : monthlyPnLFlat,
         totalMargin: totalMarginUSD,
@@ -1368,7 +1370,8 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
           basisProfit: 0, // No basis profit for same-direction hedge
           totalFees,
           monthlyPnL,
-          apy: (monthlyPnL / totalMargin) * 12 * 100,
+          apy: totalMargin > 0 ? ((1 + monthlyPnL / totalMargin) ** 12 - 1) * 100 : 0,
+          apr: totalMargin > 0 ? (monthlyPnL / totalMargin) * 12 * 100 : 0,
           pnlUp5,
           pnlUp10,
           pnlDown5,
@@ -2526,6 +2529,7 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
         btcPrice={twilightPrice}
         tvl={tvl}
         getPerpHedgeMetrics={getPerpHedgeMetricsForLending}
+        currentTwilightFundingAPY={twilightFundingRate * 3 * 365 * 100}
         selectedStrategy={selectedStrategy}
         onSelectStrategy={setSelectedStrategy}
         getTtmApr={getTtmApr}
