@@ -1,0 +1,15 @@
+{
+  "name": "twilight-strategy-api",
+  "version": "1.0.0",
+  "description": "Twilight Strategy Tester API - query and run trading strategies",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "ws": "^8.18.0",
+    "cors": "^2.8.5"
+  }
+}
