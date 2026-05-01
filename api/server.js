@@ -240,6 +240,10 @@ app.post('/api/strategies/run', (req, res) => {
 });
 
 // --- Trade Impact ---
+// Phase 3.5: prefer live chain pool sizes over the manually-configured poolConfig.
+// When chain data is available, the impact answer agrees with the chainPool block
+// in /api/market — same skew baseline, same long/short notional. Falls back to
+// poolConfig only if chain feed is missing.
 app.post('/api/impact', (req, res) => {
   const md = market.getMarketData();
   if (md.twilightPrice === 0) return res.status(503).json({ error: 'Market data not yet available.' });
@@ -249,14 +253,32 @@ app.post('/api/impact', (req, res) => {
     return res.status(400).json({ error: 'tradeSize and direction (LONG/SHORT) required.' });
   }
 
-  const longImpact = calculateTradeImpact(Number(tradeSize), 'LONG', poolConfig, md);
-  const shortImpact = calculateTradeImpact(Number(tradeSize), 'SHORT', poolConfig, md);
+  const useChain = Number.isFinite(md.twilightTotalLongBtc)
+                && Number.isFinite(md.twilightTotalShortBtc)
+                && Number.isFinite(md.twilightPrice) && md.twilightPrice > 0;
+  const effectivePool = useChain
+    ? {
+        ...poolConfig,
+        twilightLongSize:  Math.round(md.twilightTotalLongBtc  * md.twilightPrice),
+        twilightShortSize: Math.round(md.twilightTotalShortBtc * md.twilightPrice),
+      }
+    : poolConfig;
+
+  const longImpact  = calculateTradeImpact(Number(tradeSize), 'LONG',  effectivePool, md);
+  const shortImpact = calculateTradeImpact(Number(tradeSize), 'SHORT', effectivePool, md);
+  const totalSize   = effectivePool.twilightLongSize + effectivePool.twilightShortSize;
+  const currentSkew = totalSize > 0 ? effectivePool.twilightLongSize / totalSize : 0.5;
 
   res.json({
     timestamp: new Date().toISOString(),
     tradeSize: Number(tradeSize),
-    currentSkew: (poolConfig.twilightLongSize + poolConfig.twilightShortSize) > 0
-      ? poolConfig.twilightLongSize / (poolConfig.twilightLongSize + poolConfig.twilightShortSize) : 0.5,
+    source: useChain ? 'chain' : 'config',
+    poolUsed: {
+      twilightLongSize:  effectivePool.twilightLongSize,
+      twilightShortSize: effectivePool.twilightShortSize,
+      twilightFundingCapPct: effectivePool.twilightFundingCapPct,
+    },
+    currentSkew,
     longImpact,
     shortImpact,
   });
@@ -281,10 +303,14 @@ app.get('/api/categories', (req, res) => {
 // START SERVER
 // ===========================
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => {
+// Hardening: bind localhost only by default. nginx is the public-facing layer
+// (port 80/443) and proxies /api/* to localhost:3000. Set STRATEGY_API_BIND=0.0.0.0
+// to expose port 3000 directly (legacy / development).
+const BIND_HOST = process.env.STRATEGY_API_BIND || '127.0.0.1';
+app.listen(PORT, BIND_HOST, () => {
   console.log(`\n========================================`);
   console.log(`  Twilight Strategy API`);
-  console.log(`  Running on port ${PORT}`);
-  console.log(`  Health: http://0.0.0.0:${PORT}/api/health`);
+  console.log(`  Bound on ${BIND_HOST}:${PORT}`);
+  console.log(`  Health: http://${BIND_HOST}:${PORT}/api/health`);
   console.log(`========================================\n`);
 });
