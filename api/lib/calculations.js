@@ -29,7 +29,12 @@ function applyTwilightFundingCap(rawTwilight, binanceRate, capPct) {
   return rawTwilight < capValue ? capValue : rawTwilight;
 }
 
-function getTwilightFundingRate(twilightLongSize, twilightShortSize, binanceFundingRate, twilightFundingCapPct) {
+// realRate (first arg) is the chain-side rate from the relayer's get_market_stats.
+// When provided AND finite, it wins — that's the source of truth used by the matching engine.
+// Falls back to the formula-based rate (computed from poolConfig) when realRate is null/undefined,
+// e.g. while the relayer poll hasn't returned yet, or in offline tests.
+function getTwilightFundingRate(realRate, twilightLongSize, twilightShortSize, binanceFundingRate, twilightFundingCapPct) {
+  if (typeof realRate === 'number' && Number.isFinite(realRate)) return realRate;
   const raw = calculateTwilightFundingRate(twilightLongSize, twilightShortSize);
   if (twilightFundingCapPct > 0) {
     return (twilightFundingCapPct / 100) * binanceFundingRate;
@@ -52,6 +57,7 @@ function calculateStrategyAPY(strategy, marketData, poolConfig) {
   const spread = btcPrice - cexPrice;
   const binanceFundingRate = marketData.binanceFundingRate;
   const twilightFundingRate = getTwilightFundingRate(
+    marketData.twilightFundingRate,
     poolConfig.twilightLongSize, poolConfig.twilightShortSize,
     binanceFundingRate, poolConfig.twilightFundingCapPct
   );

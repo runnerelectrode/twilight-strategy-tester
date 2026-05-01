@@ -71,7 +71,9 @@ app.use('/api', authMiddleware);
 app.get('/api/market', (req, res) => {
   const md = market.getMarketData();
   const st = market.getStatus();
-  const tfr = getTwilightFundingRate(poolConfig.twilightLongSize, poolConfig.twilightShortSize, md.binanceFundingRate, poolConfig.twilightFundingCapPct);
+  const tfr = getTwilightFundingRate(md.twilightFundingRate, poolConfig.twilightLongSize, poolConfig.twilightShortSize, md.binanceFundingRate, poolConfig.twilightFundingCapPct);
+  const tfrSource = (typeof md.twilightFundingRate === 'number' && Number.isFinite(md.twilightFundingRate)) ? 'relayer' : 'computed';
+  const tfrEst = (typeof md.twilightEstimatedFundingRate === 'number' && Number.isFinite(md.twilightEstimatedFundingRate)) ? md.twilightEstimatedFundingRate : null;
   const currentSkew = (poolConfig.twilightLongSize + poolConfig.twilightShortSize) > 0
     ? poolConfig.twilightLongSize / (poolConfig.twilightLongSize + poolConfig.twilightShortSize) : 0.5;
   const currentTwilightAPY = Math.abs(tfr) * 3 * 365 * 100;
@@ -90,7 +92,17 @@ app.get('/api/market', (req, res) => {
     },
     fundingRates: {
       binance: { rate: md.binanceFundingRate, ratePct: (md.binanceFundingRate * 100).toFixed(4) + '%', annualizedAPY: (Math.abs(md.binanceFundingRate) * 3 * 365 * 100).toFixed(2) + '%', nextFundingTime: md.nextFundingTime },
-      twilight: { rate: tfr, ratePct: (tfr * 100).toFixed(4) + '%', annualizedAPY: currentTwilightAPY.toFixed(2) + '%' },
+      twilight: {
+        rate: tfr,
+        ratePct: (tfr * 100).toFixed(4) + '%',
+        annualizedAPY: currentTwilightAPY.toFixed(2) + '%',
+        source: tfrSource,
+        lastFundingTimestamp: md.twilightFundingTimestamp,
+        estimatedRate: tfrEst,
+        estimatedRatePct: tfrEst !== null ? (tfrEst * 100).toFixed(4) + '%' : null,
+        estimatedAPY: tfrEst !== null ? (Math.abs(tfrEst) * 3 * 365 * 100).toFixed(2) + '%' : null,
+        nextFundingTimestamp: md.twilightEstimatedFundingTimestamp,
+      },
       bybit: md.bybitPrice > 0 ? { rate: md.bybitFundingRate, ratePct: (md.bybitFundingRate * 100).toFixed(4) + '%', annualizedAPY: (Math.abs(md.bybitFundingRate) * 3 * 365 * 100).toFixed(2) + '%', nextFundingTime: md.bybitNextFundingTime } : null,
     },
     spreads: {
@@ -103,6 +115,19 @@ app.get('/api/market', (req, res) => {
       isLongHeavy: currentSkew > 0.55,
       isShortHeavy: currentSkew < 0.45,
     },
+    chainPool: md.twilightStatus ? {
+      status: md.twilightStatus,
+      statusReason: md.twilightStatusReason,
+      longPct: md.twilightLongPct,
+      shortPct: md.twilightShortPct,
+      totalLongBtc: md.twilightTotalLongBtc,
+      totalShortBtc: md.twilightTotalShortBtc,
+      openInterestBtc: md.twilightOpenInterestBtc,
+      poolEquityBtc: md.twilightPoolEquityBtc,
+      utilization: md.twilightUtilization,
+      utilizationPct: md.twilightUtilization !== null ? (md.twilightUtilization * 100).toFixed(2) + '%' : null,
+      riskParams: md.twilightRiskParams,
+    } : null,
     connections: st,
   });
 });

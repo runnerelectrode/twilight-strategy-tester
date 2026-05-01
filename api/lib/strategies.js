@@ -9,6 +9,7 @@ function generateStrategies(marketData, poolConfig) {
   const bybitFundingRate = marketData.bybitFundingRate;
 
   const twilightFundingRate = getTwilightFundingRate(
+    marketData.twilightFundingRate,
     poolConfig.twilightLongSize, poolConfig.twilightShortSize,
     binanceFundingRate, poolConfig.twilightFundingCapPct
   );
