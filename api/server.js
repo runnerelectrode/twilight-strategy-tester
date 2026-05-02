@@ -259,8 +259,12 @@ app.post('/api/impact', (req, res) => {
   const effectivePool = useChain
     ? {
         ...poolConfig,
-        twilightLongSize:  Math.round(md.twilightTotalLongBtc  * md.twilightPrice),
-        twilightShortSize: Math.round(md.twilightTotalShortBtc * md.twilightPrice),
+        // Chain values look like BTC by field name but are actually sats —
+        // verified empirically: pre-trade total_*_btc=4040 and a 102000-sat
+        // short reported back as total_short_btc=106040 (delta = exactly the
+        // sat amount). Divide by 1e8 to convert sats → BTC before pricing.
+        twilightLongSize:  Math.round(md.twilightTotalLongBtc  * md.twilightPrice / 1e8),
+        twilightShortSize: Math.round(md.twilightTotalShortBtc * md.twilightPrice / 1e8),
       }
     : poolConfig;
 

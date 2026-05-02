@@ -298,12 +298,17 @@ function calculateTradeImpact(tradeSizeUSD, direction, poolConfig, marketData) {
 
   const annualizedAPY = Math.abs(cappedFundingRate) * 3 * 365 * 100;
   const longsDominate = newSkew > 0.5;
+  const shortsDominate = newSkew < 0.5;
 
+  // Twilight funding: the heavy side pays the light side. So you PAY when
+  // your direction matches the post-trade dominant side, and EARN when it's
+  // opposite. Previous version only handled the long-heavy case, so heavy-
+  // short scenarios silently returned youPay:false / youEarn:false.
   return {
     newSkew, newLongs, newShorts, skewChange,
     newFundingRate: cappedFundingRate, annualizedAPY,
-    youPay: direction === 'LONG' && longsDominate,
-    youEarn: direction === 'SHORT' && longsDominate,
+    youPay:  (direction === 'LONG' && longsDominate)  || (direction === 'SHORT' && shortsDominate),
+    youEarn: (direction === 'LONG' && shortsDominate) || (direction === 'SHORT' && longsDominate),
     helpsBalance: (direction === 'LONG' && currentSkew < 0.5) || (direction === 'SHORT' && currentSkew > 0.5)
   };
 }
