@@ -4,6 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "api": "node server/api-server.js",
     "dev": "vite",
     "build": "vite build",
     "build:dev": "vite build --mode development",
