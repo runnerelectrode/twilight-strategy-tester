@@ -2,6 +2,9 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, BarChart, Bar, Cell, AreaChart, Area } from 'recharts';
 import { ArrowUpRight, ArrowDownRight, DollarSign, TrendingUp, AlertCircle, Wifi, WifiOff, Activity, Settings, Info, ArrowRight } from 'lucide-react';
 import { getFundingAverages, avgRateToAPR } from './utils/fundingAverages';
+import { buildSpreadStrategies } from './strategies/spreadStrategies';
+import { SpreadStrategiesTable } from './components/SpreadStrategiesTable';
+import { LendingPoolSection } from './components/LendingPoolSection';
 
 const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
   // ===================
@@ -524,7 +527,7 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
   // STRATEGY GENERATION
   // ===================
 
-  const generateStrategies = useMemo(() => {
+  const generateStrategiesResult = useMemo(() => {
     const strategies = [];
     const btcPrice = twilightPrice;
     const maxPositionUSD = tvl; // Max position value limited by TVL
@@ -625,7 +628,7 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
       const totalMaxLoss = twilightMaxLoss + binanceMaxLoss;
 
       if (totalMarginUSD === 0) return {
-        apy: 0, dailyPnL: 0, monthlyPnL: 0, totalMargin: 0,
+        apy: 0, apr: 0, dailyPnL: 0, monthlyPnL: 0, totalMargin: 0,
         twilightMarginBTC: 0, twilightMarginUSD: 0, binanceMarginUSDT: 0,
         totalFees: 0, basisProfit: 0, monthlyFundingPnL: 0,
         twilightLiquidationPrice: null, twilightLiquidationPct: null,
@@ -687,14 +690,16 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
       }
 
       // ===================
-      // BASIS PROFIT
+      // BASIS PROFIT (spread strategies and other opposite-side hedges)
       // ===================
-
-      // For hedged positions, capture the spread
+      // When we are long one venue and short the other (delta-neutral), we capture
+      // the price gap when it narrows. In this app twilightPrice = Binance spot,
+      // cexPrice = Binance futures, so spread = spot - futures.
+      // Formula: basisProfit = |spread| × positionBTC,
+      // where positionBTC = min(twilightSize, binanceSize) / btcPrice.
+      // See also: src/strategies/spreadStrategies.js for spread strategy definitions.
       let basisProfit = 0;
       if (twilightPosition && binancePosition && twilightPosition !== binancePosition) {
-        // Delta-neutral: capture spread when positions converge
-        // Spread profit = |spread| × position BTC size
         const positionBTC = Math.min(twilightSize, binanceSize) / btcPrice;
         basisProfit = Math.abs(spread) * positionBTC;
       }
@@ -832,9 +837,10 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
         }
       }
 
-      // APY calculation based on total capital deployed (flat price scenario)
-      const monthlyROI = (monthlyPnLFlat / totalMarginUSD) * 100;
-      const apy = monthlyROI * 12;
+      // APY (compound) and APR (simple) based on total capital deployed (flat price scenario)
+      const monthlyROI = totalMarginUSD > 0 ? monthlyPnLFlat / totalMarginUSD : 0;
+      const apr = monthlyROI * 12 * 100; // simple annualized
+      const apy = totalMarginUSD > 0 ? ((1 + monthlyROI) ** 12 - 1) * 100 : 0; // compound
 
       // APY with +5% price move
       const apyUp5 = ((pnlUp5 / totalMarginUSD) * 100) * 12;
@@ -878,6 +884,7 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
 
       return {
         apy: isNaN(apy) ? 0 : apy,
+        apr: isNaN(apr) ? 0 : apr,
         dailyPnL: isNaN(dailyPnL) ? 0 : dailyPnL,
         monthlyPnL: isNaN(monthlyPnLFlat) ? 0 : monthlyPnLFlat,
         totalMargin: totalMarginUSD,
@@ -928,8 +935,8 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
 
       strategies.push({
         id: id++,
-        name: `Twilight Long ${lev}x`,
-        description: `Long BTC on Twilight only. No hedge. Directional bet.`,
+        name: `Twilight spot Long ${lev}x`,
+        description: `Long BTC spot on Twilight only (Twilight = Binance spot). No hedge. Directional bet.`,
         category: 'Directional',
         twilightPosition: 'LONG',
         twilightSize: size,
@@ -946,8 +953,8 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
 
       strategies.push({
         id: id++,
-        name: `Twilight Short ${lev}x`,
-        description: `Short BTC on Twilight only. No hedge. Directional bet.`,
+        name: `Twilight spot Short ${lev}x`,
+        description: `Short BTC spot on Twilight only (Twilight = Binance spot). No hedge. Directional bet.`,
         category: 'Directional',
         twilightPosition: 'SHORT',
         twilightSize: size,
@@ -969,8 +976,8 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
 
       strategies.push({
         id: id++,
-        name: `Binance Long ${lev}x`,
-        description: `Long BTC on Binance Futures. Subject to funding fees.`,
+        name: `Binance perp Long ${lev}x`,
+        description: `Long BTC on Binance perpetual (perp). Subject to funding fees.`,
         category: 'CEX Only',
         twilightPosition: null,
         twilightSize: 0,
@@ -987,8 +994,8 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
 
       strategies.push({
         id: id++,
-        name: `Binance Short ${lev}x`,
-        description: `Short BTC on Binance Futures. Collect funding if rate positive.`,
+        name: `Binance perp Short ${lev}x`,
+        description: `Short BTC on Binance perpetual (perp). Collect funding if rate positive.`,
         category: 'CEX Only',
         twilightPosition: null,
         twilightSize: 0,
@@ -1011,8 +1018,8 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
       for (const lev of [10, 20]) {
         strategies.push({
           id: id++,
-          name: `Hedge: Long Twi / Short Bin ${lev}x ($${size})`,
-          description: `Delta-neutral: Long on Twilight (0 funding), Short on Binance (collect funding). Capture spread + funding arb.`,
+          name: `Hedge: Long spot / Short perp ${lev}x ($${size})`,
+          description: `Delta-neutral: Long Twilight spot, Short Binance perp. Capture spread + funding arb.`,
           category: 'Delta-Neutral',
           twilightPosition: 'LONG',
           twilightSize: size,
@@ -1036,8 +1043,8 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
       for (const lev of [10, 20]) {
         strategies.push({
           id: id++,
-          name: `Hedge: Short Twi / Long Bin ${lev}x ($${size})`,
-          description: `Delta-neutral: Short on Twilight, Long on Binance. Pay Binance funding but earn Twilight funding if shorts > longs.`,
+          name: `Hedge: Short spot / Long perp ${lev}x ($${size})`,
+          description: `Delta-neutral: Short Twilight spot, Long Binance perp. Pay Binance funding but earn Twilight funding if shorts > longs.`,
           category: 'Delta-Neutral',
           twilightPosition: 'SHORT',
           twilightSize: size,
@@ -1059,8 +1066,8 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
 
     strategies.push({
       id: id++,
-      name: `Max Funding Arb: Long Twi / Short Bin`,
-      description: `Maximum capital deployment for funding arbitrage. Long Twilight (0 funding), Short Binance (collect ${(binanceFundingRate * 100).toFixed(4)}% per 8h).`,
+      name: `Max Funding Arb: Long spot / Short perp`,
+      description: `Maximum capital deployment for funding arbitrage. Long Twilight spot, Short Binance perp (collect ${(binanceFundingRate * 100).toFixed(4)}% per 8h).`,
       category: 'Funding Arb',
       twilightPosition: 'LONG',
       twilightSize: maxSize,
@@ -1077,8 +1084,8 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
 
     strategies.push({
       id: id++,
-      name: `Max Funding Arb: Short Twi / Long Bin`,
-      description: `Reverse funding arb. Useful when Binance funding is negative (shorts pay longs).`,
+      name: `Max Funding Arb: Short spot / Long perp`,
+      description: `Reverse funding arb. Short Twilight spot, Long Binance perp. Useful when Binance funding is negative (shorts pay longs).`,
       category: 'Funding Arb',
       twilightPosition: 'SHORT',
       twilightSize: maxSize,
@@ -1096,8 +1103,8 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
     // Strategy 19-20: Conservative Low Leverage
     strategies.push({
       id: id++,
-      name: `Conservative Hedge 5x ($100)`,
-      description: `Low leverage delta-neutral for safety. Long Twilight, Short Binance.`,
+      name: `Conservative Hedge 5x: Long spot / Short perp ($100)`,
+      description: `Low leverage delta-neutral for safety. Long Twilight spot, Short Binance perp.`,
       category: 'Conservative',
       twilightPosition: 'LONG',
       twilightSize: 100,
@@ -1114,8 +1121,8 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
 
     strategies.push({
       id: id++,
-      name: `Conservative Hedge 5x ($50)`,
-      description: `Minimal capital at risk. Test strategy for learning.`,
+      name: `Conservative Hedge 5x: Long spot / Short perp ($50)`,
+      description: `Minimal capital at risk. Long Twilight spot, Short Binance perp. Test strategy for learning.`,
       category: 'Conservative',
       twilightPosition: 'LONG',
       twilightSize: 50,
@@ -1139,8 +1146,8 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
     const stablecoinSize = Math.min(150, tvl);
     strategies.push({
       id: id++,
-      name: `Stablecoin Position (No Hedge)`,
-      description: `SHORT on Twilight only. No CEX hedge = no funding bleed. Creates stable USD value if you hold spot BTC. Earn funding when longs > shorts.`,
+      name: `Stablecoin Position: Short spot (No Hedge)`,
+      description: `SHORT Twilight spot only. No CEX hedge = no funding bleed. Creates stable USD value if you hold spot BTC. Earn funding when longs > shorts.`,
       category: 'Capital Efficient',
       twilightPosition: 'SHORT',
       twilightSize: stablecoinSize,
@@ -1161,10 +1168,10 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
     const isLongHeavy = currentSkew > 0.55;
     strategies.push({
       id: id++,
-      name: `Funding Harvest ${isLongHeavy ? '✓' : '✗'} (SHORT)`,
+      name: `Funding Harvest ${isLongHeavy ? '✓' : '✗'} (SHORT spot)`,
       description: isLongHeavy
-        ? `PROFITABLE NOW! Book is ${(currentSkew * 100).toFixed(1)}% long. Shorts EARN ${currentTwilightAPY.toFixed(1)}% APY. No CEX hedge needed.`
-        : `NOT PROFITABLE NOW. Book is ${(currentSkew * 100).toFixed(1)}% long. Wait until >55% long to SHORT.`,
+        ? `PROFITABLE NOW! Book is ${(currentSkew * 100).toFixed(1)}% long. Short spot EARN ${currentTwilightAPY.toFixed(1)}% APY. No CEX hedge needed.`
+        : `NOT PROFITABLE NOW. Book is ${(currentSkew * 100).toFixed(1)}% long. Wait until >55% long to SHORT spot.`,
       category: 'Funding Harvest',
       twilightPosition: 'SHORT',
       twilightSize: harvestSize,
@@ -1188,8 +1195,8 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
     // For traders who want leveraged BTC exposure without hedge costs
     strategies.push({
       id: id++,
-      name: `Leveraged Long (No Hedge)`,
-      description: `LONG on Twilight only. No CEX hedge = no funding bleed. Earn funding when shorts > longs (book is short-heavy).`,
+      name: `Leveraged Long: Long spot (No Hedge)`,
+      description: `LONG Twilight spot only. No CEX hedge = no funding bleed. Earn funding when shorts > longs (book is short-heavy).`,
       category: 'Capital Efficient',
       twilightPosition: 'LONG',
       twilightSize: stablecoinSize,
@@ -1208,10 +1215,10 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
     const isShortHeavy = currentSkew < 0.45;
     strategies.push({
       id: id++,
-      name: `Funding Harvest ${isShortHeavy ? '✓' : '✗'} (LONG)`,
+      name: `Funding Harvest ${isShortHeavy ? '✓' : '✗'} (LONG spot)`,
       description: isShortHeavy
-        ? `PROFITABLE NOW! Book is ${(currentSkew * 100).toFixed(1)}% long. Longs EARN ${currentTwilightAPY.toFixed(1)}% APY. No CEX hedge needed.`
-        : `NOT PROFITABLE NOW. Book is ${(currentSkew * 100).toFixed(1)}% long. Wait until <45% long to go LONG.`,
+        ? `PROFITABLE NOW! Book is ${(currentSkew * 100).toFixed(1)}% long. Long spot EARN ${currentTwilightAPY.toFixed(1)}% APY. No CEX hedge needed.`
+        : `NOT PROFITABLE NOW. Book is ${(currentSkew * 100).toFixed(1)}% long. Wait until <45% long to go LONG spot.`,
       category: 'Funding Harvest',
       twilightPosition: 'LONG',
       twilightSize: harvestSize,
@@ -1237,9 +1244,9 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
     const isDualArbProfitable = isLongHeavy && isBinanceNegative;
     strategies.push({
       id: id++,
-      name: `Dual SHORT Arb ${isDualArbProfitable ? '✓✓' : '✗'}`,
+      name: `Dual SHORT Arb ${isDualArbProfitable ? '✓✓' : '✗'} (Short spot + Short perp)`,
       description: isDualArbProfitable
-        ? `RARE OPPORTUNITY! Both sides pay YOU. Twilight: shorts earn (${(currentSkew * 100).toFixed(0)}% long). Binance: shorts earn (${(binanceFundingRate * 100).toFixed(4)}% negative).`
+        ? `RARE OPPORTUNITY! Both sides pay YOU. Short spot: earn (${(currentSkew * 100).toFixed(0)}% long). Short perp: earn (${(binanceFundingRate * 100).toFixed(4)}% negative).`
         : `NOT PROFITABLE. Need: Twilight long-heavy (${isLongHeavy ? '✓' : '✗'}) AND Binance funding negative (${isBinanceNegative ? '✓' : '✗'}).`,
       category: 'Dual Arb',
       twilightPosition: 'SHORT',
@@ -1264,9 +1271,9 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
     const isDualLongArbProfitable = isShortHeavy && isBinancePositive;
     strategies.push({
       id: id++,
-      name: `Dual LONG Arb ${isDualLongArbProfitable ? '✓✓' : '✗'}`,
+      name: `Dual LONG Arb ${isDualLongArbProfitable ? '✓✓' : '✗'} (Long spot + Long perp)`,
       description: isDualLongArbProfitable
-        ? `RARE OPPORTUNITY! Both sides pay YOU. Twilight: longs earn (${(currentSkew * 100).toFixed(0)}% short-heavy). Binance: longs earn (${(binanceFundingRate * 100).toFixed(4)}% positive).`
+        ? `RARE OPPORTUNITY! Both sides pay YOU. Long spot: earn (${(currentSkew * 100).toFixed(0)}% short-heavy). Long perp: earn (${(binanceFundingRate * 100).toFixed(4)}% positive).`
         : `NOT PROFITABLE. Need: Twilight short-heavy (${isShortHeavy ? '✓' : '✗'}) AND Binance funding positive (${isBinancePositive ? '✓' : '✗'}).`,
       category: 'Dual Arb',
       twilightPosition: 'LONG',
@@ -1290,6 +1297,7 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
     // Both Twilight and Bybit are inverse (BTC-margined) perpetuals
     // This creates true BTC-denominated delta-neutral positions
     // ===================
+    let calculateBybitStrategyRef = null;
     if (bybitPrice > 0) {
       const BYBIT_TAKER_FEE = 0.00055; // 0.055% taker fee
       const bybitAnnualizedFunding = Math.abs(bybitFundingRate) * 3 * 365 * 100; // Bybit has 3 funding payments per day
@@ -1362,7 +1370,8 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
           basisProfit: 0, // No basis profit for same-direction hedge
           totalFees,
           monthlyPnL,
-          apy: (monthlyPnL / totalMargin) * 12 * 100,
+          apy: totalMargin > 0 ? ((1 + monthlyPnL / totalMargin) ** 12 - 1) * 100 : 0,
+          apr: totalMargin > 0 ? (monthlyPnL / totalMargin) * 12 * 100 : 0,
           pnlUp5,
           pnlUp10,
           pnlDown5,
@@ -1393,7 +1402,7 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
 
       strategies.push({
         id: id++,
-        name: `Inverse Arb: Short Twi / Long Bybit ${isShortTwiLongBybitProfitable ? '✓✓' : ''}`,
+        name: `Inverse Arb: Short Twi perp / Long Bybit perp ${isShortTwiLongBybitProfitable ? '✓✓' : ''}`,
         description: isShortTwiLongBybitProfitable
           ? `INVERSE PERP ARB! Both BTC-margined. Twilight shorts earn (${(currentSkew * 100).toFixed(0)}% long). Bybit longs earn (${(bybitFundingRate * 100).toFixed(4)}% negative). True BTC delta-neutral.`
           : `Inverse perp hedge. Twilight: ${isLongHeavy ? 'shorts earn ✓' : 'shorts pay ✗'}. Bybit: ${isBybitNegative ? 'longs earn ✓' : 'longs pay ✗'}. Both BTC-margined = no USD conversion risk.`,
@@ -1417,7 +1426,7 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
 
       strategies.push({
         id: id++,
-        name: `Inverse Arb: Long Twi / Short Bybit ${isLongTwiShortBybitProfitable ? '✓✓' : ''}`,
+        name: `Inverse Arb: Long Twi perp / Short Bybit perp ${isLongTwiShortBybitProfitable ? '✓✓' : ''}`,
         description: isLongTwiShortBybitProfitable
           ? `INVERSE PERP ARB! Both BTC-margined. Twilight longs earn (${(currentSkew * 100).toFixed(0)}% short-heavy). Bybit shorts earn (${(bybitFundingRate * 100).toFixed(4)}% positive). True BTC delta-neutral.`
           : `Inverse perp hedge. Twilight: ${isShortHeavy ? 'longs earn ✓' : 'longs pay ✗'}. Bybit: ${isBybitPositive ? 'shorts earn ✓' : 'shorts pay ✗'}. Both BTC-margined = no USD conversion risk.`,
@@ -1441,7 +1450,7 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
 
       strategies.push({
         id: id++,
-        name: `Max Inverse Arb 20x: Short Twi / Long Bybit`,
+        name: `Max Inverse Arb 20x: Short Twi perp / Long Bybit perp`,
         description: `Maximum leverage inverse arb. Both platforms BTC-margined. Position: $${maxInverseSize} each side @ 20x. Delta-neutral in BTC terms.`,
         category: 'Bybit Inverse',
         twilightPosition: 'SHORT',
@@ -1462,7 +1471,7 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
 
       strategies.push({
         id: id++,
-        name: `Conservative Inverse 5x: Short Twi / Long Bybit`,
+        name: `Conservative Inverse 5x: Short Twi perp / Long Bybit perp`,
         description: `Low leverage inverse arb for safety. Both BTC-margined. Lower liquidation risk. Good for beginners.`,
         category: 'Bybit Inverse',
         twilightPosition: 'SHORT',
@@ -1483,7 +1492,7 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
 
       strategies.push({
         id: id++,
-        name: `Funding Capture 15x: Short Twi / Long Bybit ${isShortTwiLongBybitProfitable ? '✓' : ''}`,
+        name: `Funding Capture 15x: Short Twi perp / Long Bybit perp ${isShortTwiLongBybitProfitable ? '✓' : ''}`,
         description: `Higher leverage (15x) for amplified funding capture. Both BTC-margined inverse perps. Moderate liquidation risk with higher returns.`,
         category: 'Bybit Inverse',
         twilightPosition: 'SHORT',
@@ -1505,7 +1514,7 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
 
       strategies.push({
         id: id++,
-        name: `Large Inverse Arb 10x: Short Twi / Long Bybit`,
+        name: `Large Inverse Arb 10x: Short Twi perp / Long Bybit perp`,
         description: `Larger $${largeSize} position @ 10x on both sides. More absolute profit potential with standard risk.`,
         category: 'Bybit Inverse',
         twilightPosition: 'SHORT',
@@ -1526,7 +1535,7 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
 
       strategies.push({
         id: id++,
-        name: `Mini Inverse 3x: Short Twi / Long Bybit`,
+        name: `Mini Inverse 3x: Short Twi perp / Long Bybit perp`,
         description: `Minimal leverage (3x) for beginners. Very low liquidation risk. $50 position. Learn inverse perp arb safely.`,
         category: 'Bybit Inverse',
         twilightPosition: 'SHORT',
@@ -1548,7 +1557,7 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
 
       strategies.push({
         id: id++,
-        name: `Asymmetric 5x/10x: Short Twi / Long Bybit`,
+        name: `Asymmetric 5x/10x: Short Twi perp / Long Bybit perp`,
         description: `Lower leverage on Twilight (5x) for safety, higher on Bybit (10x). Asymmetric risk profile. Safer on shorts.`,
         category: 'Bybit Inverse',
         twilightPosition: 'SHORT',
@@ -1572,7 +1581,7 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
 
       strategies.push({
         id: id++,
-        name: `Spread Capture 10x ${isSpreadSignificant ? '📈' : ''}`,
+        name: `Spread Capture 10x: Twi perp vs Bybit perp ${isSpreadSignificant ? '📈' : ''}`,
         description: isSpreadSignificant
           ? `SPREAD OPPORTUNITY! ${spreadBps.toFixed(1)} bps spread. Short higher-priced venue, long lower-priced. Spread: $${Math.abs(twilightPrice - bybitPrice).toFixed(2)}`
           : `Capture price spread between venues. Current spread: ${spreadBps.toFixed(1)} bps. More profitable when spread widens.`,
@@ -1601,7 +1610,7 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
 
       strategies.push({
         id: id++,
-        name: `Funding Diff Capture ${isFundingDiffLarge ? '💰' : ''}`,
+        name: `Funding Diff Capture: Twi perp vs Bybit perp ${isFundingDiffLarge ? '💰' : ''}`,
         description: `Capture funding rate differential. Twilight: ${twilightPer8hPct.toFixed(4)}%/8h. Bybit: ${bybitPer8hPct.toFixed(4)}%/8h. Diff: ${fundingDiff.toFixed(4)}%/8h.`,
         category: 'Bybit Inverse',
         twilightPosition: 'SHORT',
@@ -1623,7 +1632,7 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
 
       strategies.push({
         id: id++,
-        name: `Large Reverse Arb 10x: Long Twi / Short Bybit ${isLongTwiShortBybitProfitable ? '✓' : ''}`,
+        name: `Large Reverse Arb 10x: Long Twi perp / Short Bybit perp ${isLongTwiShortBybitProfitable ? '✓' : ''}`,
         description: `Larger $${largeSize} reverse position. Long Twilight + Short Bybit. Profitable when shorts dominate Twilight & Bybit positive funding.`,
         category: 'Bybit Inverse',
         twilightPosition: 'LONG',
@@ -1644,7 +1653,7 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
 
       strategies.push({
         id: id++,
-        name: `Conservative Reverse 5x: Long Twi / Short Bybit`,
+        name: `Conservative Reverse 5x: Long Twi perp / Short Bybit perp`,
         description: `Low leverage reverse position. Long Twilight + Short Bybit. Good when Twilight shorts dominate.`,
         category: 'Bybit Inverse',
         twilightPosition: 'LONG',
@@ -1659,10 +1668,40 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
         bybitFundingRate,
         ...strat12
       });
+      calculateBybitStrategyRef = calculateBybitStrategy;
     }
 
-    return strategies.sort((a, b) => b.apy - a.apy);
+    // Spread strategies: built in one place for easy refactor. See src/strategies/spreadStrategies.js.
+    const spreadStrategiesBuilt = buildSpreadStrategies({
+      idStart: id,
+      tvl,
+      twilightPrice,
+      cexPrice,
+      bybitPrice,
+      bybitFundingRate,
+      calculateStrategyAPY,
+      calculateBybitStrategy: calculateBybitStrategyRef,
+    });
+    spreadStrategiesBuilt.forEach((s) => strategies.push(s));
+    id += spreadStrategiesBuilt.length;
+
+    const getPerpHedgeMetrics = (opts) => calculateStrategyAPY({
+      twilightPosition: opts.position,
+      twilightSize: opts.size,
+      twilightLeverage: opts.leverage,
+      binancePosition: null,
+      binanceSize: 0,
+      binanceLeverage: 0,
+    });
+
+    return {
+      strategies: strategies.sort((a, b) => b.apy - a.apy),
+      getPerpHedgeMetrics,
+    };
   }, [twilightPrice, cexPrice, spread, binanceFundingRate, twilightFundingRate, tvl, currentSkew, currentTwilightAPY, bybitPrice, bybitFundingRate]);
+
+  const generateStrategies = generateStrategiesResult.strategies;
+  const getPerpHedgeMetricsForLending = generateStrategiesResult.getPerpHedgeMetrics;
 
   // Memoize chart data so BarChart gets stable reference (avoids new array every render → less Recharts churn)
   const strategyChartData = useMemo(
@@ -1673,6 +1712,7 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
   // Sync selectedStrategy to current strategies so we don't retain previous strategy array in memory
   useEffect(() => {
     if (!selectedStrategy) return;
+    if (selectedStrategy.isLendingPoolStrategy) return; // Lending pool strategies live in LendingPoolSection
     const current = generateStrategies.find((s) => s.id === selectedStrategy.id);
     if (current && current !== selectedStrategy) {
       setSelectedStrategy(current);
@@ -1713,6 +1753,8 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
       case 'Funding Harvest': return 'bg-amber-100 text-amber-800';
       case 'Dual Arb': return 'bg-cyan-100 text-cyan-800';
       case 'Bybit Inverse': return 'bg-violet-100 text-violet-800';
+      case 'Spread': return 'bg-teal-100 text-teal-800';
+      case 'Lending Pool': return 'bg-amber-100 text-amber-800';
       default: return 'bg-gray-100 text-gray-800';
     }
   };
@@ -2473,6 +2515,30 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
         </ResponsiveContainer>
       </div>
 
+      <SpreadStrategiesTable
+        strategies={generateStrategies}
+        selectedStrategy={selectedStrategy}
+        onSelectStrategy={setSelectedStrategy}
+        getTtmApr={getTtmApr}
+        getCategoryColor={getCategoryColor}
+        getRiskColor={getRiskColor}
+        getAPYColor={getAPYColor}
+      />
+
+      <LendingPoolSection
+        btcPrice={twilightPrice}
+        tvl={tvl}
+        getPerpHedgeMetrics={getPerpHedgeMetricsForLending}
+        currentTwilightFundingAPY={twilightFundingRate * 3 * 365 * 100}
+        selectedStrategy={selectedStrategy}
+        onSelectStrategy={setSelectedStrategy}
+        getTtmApr={getTtmApr}
+        getCategoryColor={getCategoryColor}
+        getRiskColor={getRiskColor}
+        getAPYColor={getAPYColor}
+        baseUrl="https://relayer.twilight.rest/api"
+      />
+
       {/* LONG Twilight Strategies Table */}
       <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-lg p-4 shadow mb-6 border-2 border-green-200">
         <div className="flex items-center justify-between mb-4">
@@ -2512,7 +2578,7 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
             </thead>
             <tbody>
               {(() => {
-                const longStrategies = generateStrategies.filter(s => s.twilightPosition === 'LONG');
+                const longStrategies = generateStrategies.filter(s => s.twilightPosition === 'LONG' && !s.isSpreadStrategy);
                 const twilightOnlyLong = longStrategies.filter(s => !s.isBybitStrategy && !s.binancePosition);
                 const binanceLong = longStrategies.filter(s => !s.isBybitStrategy && s.binancePosition);
                 const bybitLong = longStrategies.filter(s => s.isBybitStrategy);
@@ -2642,7 +2708,7 @@ const TwilightTradingVisualizerLive = ({ onNavigateToCEX }) => {
             </thead>
             <tbody>
               {(() => {
-                const shortStrategies = generateStrategies.filter(s => s.twilightPosition === 'SHORT');
+                const shortStrategies = generateStrategies.filter(s => s.twilightPosition === 'SHORT' && !s.isSpreadStrategy);
                 const twilightOnlyShort = shortStrategies.filter(s => !s.isBybitStrategy && !s.binancePosition);
                 const binanceShort = shortStrategies.filter(s => !s.isBybitStrategy && s.binancePosition);
                 const bybitShort = shortStrategies.filter(s => s.isBybitStrategy);
